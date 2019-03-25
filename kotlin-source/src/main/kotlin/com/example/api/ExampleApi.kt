@@ -1,10 +1,11 @@
 package com.example.api
 
 import com.example.flow.CreateIOUFlow
+import com.example.flow.PartialPayIOUFlow
 import com.example.flow.PayIOUFlow
 import com.example.schema.IOUSchemaV1
 import com.example.state.IOUState
-import net.corda.core.contracts.StateRef
+import net.corda.core.contracts.StateAndRef
 import net.corda.core.identity.CordaX500Name
 import net.corda.core.messaging.CordaRPCOps
 import net.corda.core.messaging.startTrackedFlow
@@ -13,11 +14,11 @@ import net.corda.core.node.services.IdentityService
 import net.corda.core.node.services.Vault
 import net.corda.core.node.services.vault.QueryCriteria
 import net.corda.core.node.services.vault.builder
+import net.corda.core.transactions.SignedTransaction
 import net.corda.core.utilities.getOrThrow
 import net.corda.core.utilities.loggerFor
 import org.slf4j.Logger
 import java.util.*
-import javax.management.Query
 import javax.ws.rs.*
 import javax.ws.rs.core.MediaType
 import javax.ws.rs.core.Response
@@ -79,7 +80,7 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
      */
     @PUT
     @Path("create-iou")
-    fun createIOU(@QueryParam("iouValue") iouValue: Int, @QueryParam("partyName") partyName: CordaX500Name?): Response {
+    fun payIOU(@QueryParam("iouValue") iouValue: Int, @QueryParam("partyName") partyName: CordaX500Name?): Response {
         if (iouValue <= 0 ) {
             return Response.status(BAD_REQUEST).entity("Query parameter 'iouValue' must be non-negative.\n").build()
         }
@@ -101,21 +102,21 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
 
     @PUT
     @Path("pay-iou")
-    fun createIOU(@QueryParam("uuid") uuid: UUID?): Response {
+    fun payIOU(@QueryParam("uuid") uuid: UUID?, @QueryParam("valorPago") valorPago: Int?): Response {
         if (uuid == null) {
             return Response.status(BAD_REQUEST).entity("Query parameter 'uuid' missing.\n").build()
         }
 
         val criteria = QueryCriteria.LinearStateQueryCriteria(uuid = listOf(uuid))
-        val stateRef : StateRef
+        val stateAndRef : StateAndRef<IOUState>
         try {
-            stateRef = rpcOps.vaultQueryBy<IOUState>(criteria).states.single().ref
+            stateAndRef = rpcOps.vaultQueryBy<IOUState>(criteria).states.single()
         } catch (ex: NoSuchElementException) {
             return Response.status(BAD_REQUEST).entity("State with uuid $uuid cannot be found.\n").build()
         }
 
         return try {
-            val signedTx = rpcOps.startTrackedFlow(PayIOUFlow::Initiator, stateRef).returnValue.getOrThrow()
+            val signedTx = payIOU(stateAndRef, valorPago)
             Response.status(CREATED).entity("Transaction id ${signedTx.id} committed to ledger.\n").build()
 
         } catch (ex: Throwable) {
@@ -123,8 +124,19 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
             Response.status(BAD_REQUEST).entity(ex.message!!).build()
         }
     }
-	
-	/**
+
+    private fun payIOU(stateAndRef: StateAndRef<IOUState>, valorPago: Int?) : SignedTransaction {
+        val valorDivida = stateAndRef.state.data.value
+        return if (valorPago != null && valorDivida - valorPago > 0) {
+            rpcOps.startTrackedFlow(PartialPayIOUFlow::Initiator, stateAndRef.ref, valorDivida - valorPago).returnValue.getOrThrow()
+        } else if (valorPago == null || valorDivida - valorPago == 0) {
+            rpcOps.startTrackedFlow(PayIOUFlow::Initiator, stateAndRef.ref).returnValue.getOrThrow()
+        } else {
+            throw IllegalArgumentException("Valor pago é maior que a dívida")
+        }
+    }
+
+    /**
      * Displays all IOU states that are created by Party.
      */
     @GET

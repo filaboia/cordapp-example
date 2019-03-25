@@ -49,6 +49,21 @@ class IOUContract : Contract {
                 val entrada = tx.inputsOfType<IOUState>().single()
                 "Todos os participantes devem assinar." using (command.signers.containsAll(entrada.participants.map { it.owningKey }))
             }
+            is Commands.PartialPay -> requireThat {
+                "Só uma saída deve ser gerada." using (tx.outputs.size == 1)
+                "Só uma entrada deve ser consumida." using (tx.inputs.size == 1)
+
+                val entrada = tx.inputsOfType<IOUState>().single()
+                val saida = tx.outputsOfType<IOUState>().single()
+
+                "O lender não pode mudar" using (entrada.lender == saida.lender)
+                "O borrower não pode mudar" using (entrada.borrower == saida.borrower)
+                "Os participantes não podem mudar" using (entrada.participants == saida.participants)
+
+                "O valor da saida não pode ser negativo." using (saida.value > 0)
+                "O valor da saida deve ser menor que o da entrada." using (saida.value < entrada.value)
+                "Todos os participantes devem assinar." using (command.signers.containsAll(entrada.participants.map { it.owningKey }))
+            }
         }
 
     }
@@ -59,5 +74,6 @@ class IOUContract : Contract {
     interface Commands : CommandData {
         class Create : Commands
         class Pay : Commands
+        class PartialPay : Commands
     }
 }
