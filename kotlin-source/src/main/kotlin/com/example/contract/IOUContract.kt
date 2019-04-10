@@ -1,5 +1,6 @@
 package com.example.contract
 
+import com.example.state.CashState
 import com.example.state.IOUState
 import net.corda.core.contracts.CommandData
 import net.corda.core.contracts.Contract
@@ -64,6 +65,44 @@ class IOUContract : Contract {
                 "O valor da saida deve ser menor que o da entrada." using (saida.value < entrada.value)
                 "Todos os participantes devem assinar." using (command.signers.containsAll(entrada.participants.map { it.owningKey }))
             }
+            is Commands.Emitir -> requireThat {
+                "No inputs should be consumed when issuing an IOU." using (tx.inputs.isEmpty())
+                "Only one output state should be created." using (tx.outputs.size == 1)
+                val out = tx.outputsOfType<CashState>().single()
+                "O emissor deve ser o PartyC." using (out.dono.name.toString() == "O=PartyC,L=Paris,C=FR")
+                "All of the participants must be signers." using (command.signers.containsAll(out.participants.map { it.owningKey }))
+
+                "The value must be non-negative." using (out.value > 0)
+            }
+            is Commands.TransferirParcial -> requireThat {
+                "Duas saídas devem ser gerada." using (tx.outputs.size == 2)
+                "Só uma entrada deve ser consumida." using (tx.inputs.size == 1)
+
+                val entrada = tx.inputsOfType<CashState>().single()
+
+                val alteracaoDinheiro = tx.outputsOfType<CashState>().find { it.dono == entrada.dono }
+                val novoDinheiro = tx.outputsOfType<CashState>().find { it.dono != entrada.dono}
+
+                "O dono original do dinheiro deve continuar possuindo algum dinheiro" using (alteracaoDinheiro != null)
+                "Um novo dono deve possuir dinheiro" using (novoDinheiro != null)
+
+                "O valor total após a transferencia deve ser igual ao valor original" using ((alteracaoDinheiro?.value ?: 0) + (novoDinheiro?.value ?: 0) == entrada.value)
+                "O dono original do dinheiro deve continuar com um valor maior que 0" using ((alteracaoDinheiro?.value ?: 0) > 0)
+                "O novo dono deve possuir um valor maior que 0" using ((novoDinheiro?.value ?: 0) > 0)
+            }
+            is Commands.Transferir -> requireThat {
+                "Só uma saída deve ser gerada." using (tx.outputs.size == 1)
+                "Só uma entrada deve ser consumida." using (tx.inputs.size == 1)
+
+                val entrada = tx.inputsOfType<CashState>().single()
+
+                val novoDinheiro = tx.outputsOfType<CashState>().find { it.dono != entrada.dono}
+
+                "Um novo dono deve possuir dinheiro" using (novoDinheiro != null)
+
+                "O valor total após a transferencia deve ser igual ao valor original" using ((novoDinheiro?.value ?: 0) == entrada.value)
+                "O novo dono deve possuir um valor maior que 0" using ((novoDinheiro?.value ?: 0) > 0)
+            }
         }
 
     }
@@ -75,5 +114,8 @@ class IOUContract : Contract {
         class Create : Commands
         class Pay : Commands
         class PartialPay : Commands
+        class Emitir : Commands
+        class Transferir : Commands
+        class TransferirParcial : Commands
     }
 }

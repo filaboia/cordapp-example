@@ -5,6 +5,7 @@ import com.example.contract.IOUContract
 import com.example.contract.IOUContract.Companion.IOU_CONTRACT_ID
 import com.example.flow.CreateIOUFlow.Acceptor
 import com.example.flow.CreateIOUFlow.Initiator
+import com.example.state.CashState
 import com.example.state.IOUState
 import net.corda.core.contracts.Command
 import net.corda.core.contracts.requireThat
@@ -26,11 +27,10 @@ import net.corda.core.utilities.ProgressTracker.Step
  *
  * All methods called within the [FlowLogic] sub-class need to be annotated with the @Suspendable annotation.
  */
-object CreateIOUFlow {
+object CreateCashFlow {
     @InitiatingFlow
     @StartableByRPC
-    class Initiator(val iouValue: Int,
-                    val otherParty: Party) : FlowLogic<SignedTransaction>() {
+    class Initiator(val iouValue: Int) : FlowLogic<SignedTransaction>() {
         /**
          * The progress tracker checkpoints each stage of the flow and outputs the specified messages when each
          * checkpoint is reached in the code. See the 'progressTracker.currentStep' expressions within the call() function.
@@ -69,10 +69,10 @@ object CreateIOUFlow {
             // Stage 1.
             progressTracker.currentStep = GENERATING_TRANSACTION
             // Generate an unsigned transaction.
-            val cashState = IOUState(iouValue, serviceHub.myInfo.legalIdentities.first(), otherParty)
-            val txCommand = Command(IOUContract.Commands.Create(), cashState.participants.map { it.owningKey })
+            val iouState = CashState(iouValue, null, serviceHub.myInfo.legalIdentities.first())
+            val txCommand = Command(IOUContract.Commands.Emitir(), iouState.participants.map { it.owningKey })
             val txBuilder = TransactionBuilder(notary)
-                    .addOutputState(cashState, IOU_CONTRACT_ID)
+                    .addOutputState(iouState, IOU_CONTRACT_ID)
                     .addCommand(txCommand)
 
             // Stage 2.
@@ -83,13 +83,7 @@ object CreateIOUFlow {
             // Stage 3.
             progressTracker.currentStep = SIGNING_TRANSACTION
             // Sign the transaction.
-            val partSignedTx = serviceHub.signInitialTransaction(txBuilder)
-
-            // Stage 4.
-            progressTracker.currentStep = GATHERING_SIGS
-            // Send the state to the counterparty, and receive it back with their signature.
-            val otherPartyFlow = initiateFlow(otherParty)
-            val fullySignedTx = subFlow(CollectSignaturesFlow(partSignedTx, setOf(otherPartyFlow), GATHERING_SIGS.childProgressTracker()))
+            val fullySignedTx = serviceHub.signInitialTransaction(txBuilder)
 
             // Stage 5.
             progressTracker.currentStep = FINALISING_TRANSACTION
@@ -104,10 +98,6 @@ object CreateIOUFlow {
         override fun call(): SignedTransaction {
             val signTransactionFlow = object : SignTransactionFlow(otherPartyFlow) {
                 override fun checkTransaction(stx: SignedTransaction) = requireThat {
-                    val output = stx.tx.outputs.single().data
-                    "This must be an IOU transaction." using (output is IOUState)
-                    val iou = output as IOUState
-                    "I won't accept IOUs with a value over 100." using (iou.value <= 100)
                 }
             }
 
