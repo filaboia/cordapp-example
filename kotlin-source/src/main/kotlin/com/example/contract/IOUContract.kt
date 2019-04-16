@@ -37,33 +37,54 @@ class IOUContract : Contract {
                 // Generic constraints around the IOU transaction.
                 "No inputs should be consumed when issuing an IOU." using (tx.inputs.isEmpty())
                 "Only one output state should be created." using (tx.outputs.size == 1)
-                val out = tx.outputsOfType<IOUState>().single()
-                "The lender and the borrower cannot be the same entity." using (out.lender != out.borrower)
-                "All of the participants must be signers." using (command.signers.containsAll(out.participants.map { it.owningKey }))
+                val dividaSaida = tx.outputsOfType<IOUState>().single()
+                "The lender and the borrower cannot be the same entity." using (dividaSaida.lender != dividaSaida.borrower)
+                "All of the participants must be signers." using (command.signers.containsAll(dividaSaida.participants.map { it.owningKey }))
 
                 // IOU-specific constraints.
-                "The IOU's value must be non-negative." using (out.value > 0)
+                "The IOU's value must be non-negative." using (dividaSaida.value > 0)
+
+                val dinheiroEntrada = tx.inputsOfType<CashState>().find { it.dono == dividaSaida.lender}
+                "O dono original do dinheiro deve ser quem está emprestando." using (dinheiroEntrada != null)
+
+                val dinheiroSaida = tx.outputsOfType<CashState>().find { it.dono == dividaSaida.borrower}
+                "O dono do novo dinheiro deve ser quem está recebendo." using (dinheiroSaida != null)
+                "O valor da dívida deve ser igual ao valor transferido." using ((dinheiroSaida?.value ?: 0) == dividaSaida.value)
             }
             is Commands.Pay -> requireThat {
                 "Não deve possuir outputs." using (tx.outputs.isEmpty())
                 "Só uma entrada deve ser consumida." using (tx.inputs.size == 1)
-                val entrada = tx.inputsOfType<IOUState>().single()
-                "Todos os participantes devem assinar." using (command.signers.containsAll(entrada.participants.map { it.owningKey }))
+                val dividaEntrada = tx.inputsOfType<IOUState>().single()
+                "Todos os participantes devem assinar." using (command.signers.containsAll(dividaEntrada.participants.map { it.owningKey }))
+
+                val dinheiroEntrada = tx.inputsOfType<CashState>().find { it.dono == dividaEntrada.lender}
+                "O dono original do dinheiro deve ser quem está emprestando." using (dinheiroEntrada != null)
+
+                val dinheiroSaida = tx.outputsOfType<CashState>().find { it.dono == dividaEntrada.borrower}
+                "O dono do novo dinheiro deve ser quem está recebendo." using (dinheiroSaida != null)
+                "O valor da dívida deve ser igual ao valor transferido." using ((dinheiroSaida?.value ?: 0) == dividaEntrada.value)
             }
             is Commands.PartialPay -> requireThat {
                 "Só uma saída deve ser gerada." using (tx.outputs.size == 1)
                 "Só uma entrada deve ser consumida." using (tx.inputs.size == 1)
 
-                val entrada = tx.inputsOfType<IOUState>().single()
-                val saida = tx.outputsOfType<IOUState>().single()
+                val dividaEntrada = tx.inputsOfType<IOUState>().single()
+                val dividaSaida = tx.outputsOfType<IOUState>().single()
 
-                "O lender não pode mudar" using (entrada.lender == saida.lender)
-                "O borrower não pode mudar" using (entrada.borrower == saida.borrower)
-                "Os participantes não podem mudar" using (entrada.participants == saida.participants)
+                "O lender não pode mudar" using (dividaEntrada.lender == dividaSaida.lender)
+                "O borrower não pode mudar" using (dividaEntrada.borrower == dividaSaida.borrower)
+                "Os participantes não podem mudar" using (dividaEntrada.participants == dividaSaida.participants)
 
-                "O valor da saida não pode ser negativo." using (saida.value > 0)
-                "O valor da saida deve ser menor que o da entrada." using (saida.value < entrada.value)
-                "Todos os participantes devem assinar." using (command.signers.containsAll(entrada.participants.map { it.owningKey }))
+                "O valor da saida não pode ser negativo." using (dividaSaida.value > 0)
+                "O valor da saida deve ser menor que o da entrada." using (dividaSaida.value < dividaEntrada.value)
+                "Todos os participantes devem assinar." using (command.signers.containsAll(dividaEntrada.participants.map { it.owningKey }))
+
+                val dinheiroEntrada = tx.inputsOfType<CashState>().find { it.dono == dividaEntrada.lender}
+                "O dono original do dinheiro deve ser quem está emprestando." using (dinheiroEntrada != null)
+
+                val dinheiroSaida = tx.outputsOfType<CashState>().find { it.dono == dividaEntrada.borrower}
+                "O dono do novo dinheiro deve ser quem está recebendo." using (dinheiroSaida != null)
+                "O valor subtraído da dívida deve ser igual ao valor transferido." using ((dinheiroSaida?.value ?: 0) == dividaEntrada.value - dividaSaida.value)
             }
             is Commands.Emitir -> requireThat {
                 "No inputs should be consumed when issuing an IOU." using (tx.inputs.isEmpty())

@@ -2,13 +2,9 @@ package com.example.flow
 
 import co.paralleluniverse.fibers.Suspendable
 import com.example.contract.IOUContract
-import com.example.contract.IOUContract.Companion.IOU_CONTRACT_ID
-import com.example.flow.CreateIOUFlow.Acceptor
-import com.example.flow.CreateIOUFlow.Initiator
 import com.example.state.IOUState
 import net.corda.core.contracts.*
 import net.corda.core.flows.*
-import net.corda.core.identity.Party
 import net.corda.core.transactions.SignedTransaction
 import net.corda.core.transactions.TransactionBuilder
 import net.corda.core.utilities.ProgressTracker
@@ -28,7 +24,7 @@ import net.corda.core.utilities.ProgressTracker.Step
 object PayIOUFlow {
     @InitiatingFlow
     @StartableByRPC
-    class Initiator(val stateRef: StateRef) : FlowLogic<SignedTransaction>() {
+    class Initiator(val iouStateRef: StateRef) : FlowLogic<SignedTransaction>() {
         /**
          * The progress tracker checkpoints each stage of the flow and outputs the specified messages when each
          * checkpoint is reached in the code. See the 'progressTracker.currentStep' expressions within the call() function.
@@ -67,11 +63,11 @@ object PayIOUFlow {
             // Stage 1.
             progressTracker.currentStep = GENERATING_TRANSACTION
             // Generate an unsigned transaction.
-            val transactionState = serviceHub.loadState(stateRef)
+            val transactionState = serviceHub.loadState(iouStateRef)
             val iouState = transactionState.data as IOUState
             val txCommand = Command(IOUContract.Commands.Pay(), iouState.participants.map { it.owningKey })
             val txBuilder = TransactionBuilder(notary)
-                    .addInputState(StateAndRef(transactionState, stateRef))
+                    .addInputState(StateAndRef(transactionState, iouStateRef))
                     .addCommand(txCommand)
 
             // Stage 2.

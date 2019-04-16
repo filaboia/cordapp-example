@@ -87,7 +87,7 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
         if (partyName == null) {
             return Response.status(BAD_REQUEST).entity("Query parameter 'partyName' missing or has wrong format.\n").build()
         }
-        val otherParty = rpcOps.wellKnownPartyFromX500Name(partyName) ?:
+        val otherParty = rpcOps.wellKnownPartyFromX500Name (partyName) ?:
                 return Response.status(BAD_REQUEST).entity("Party named $partyName cannot be found.\n").build()
 
         return try {

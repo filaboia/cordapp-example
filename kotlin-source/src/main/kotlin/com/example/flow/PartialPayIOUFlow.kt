@@ -2,13 +2,10 @@ package com.example.flow
 
 import co.paralleluniverse.fibers.Suspendable
 import com.example.contract.IOUContract
-import com.example.contract.IOUContract.Companion.IOU_CONTRACT_ID
-import com.example.flow.CreateIOUFlow.Acceptor
-import com.example.flow.CreateIOUFlow.Initiator
+import com.example.state.CashState
 import com.example.state.IOUState
 import net.corda.core.contracts.*
 import net.corda.core.flows.*
-import net.corda.core.identity.Party
 import net.corda.core.transactions.SignedTransaction
 import net.corda.core.transactions.TransactionBuilder
 import net.corda.core.utilities.ProgressTracker
@@ -28,7 +25,9 @@ import net.corda.core.utilities.ProgressTracker.Step
 object PartialPayIOUFlow {
     @InitiatingFlow
     @StartableByRPC
-    class Initiator(val stateRef: StateRef, val iouValue: Int) : FlowLogic<SignedTransaction>() {
+    class Initiator(val cashStateRef: StateRef,
+                    val iouStateRef: StateRef,
+                    val iouValue: Int) : FlowLogic<SignedTransaction>() {
         /**
          * The progress tracker checkpoints each stage of the flow and outputs the specified messages when each
          * checkpoint is reached in the code. See the 'progressTracker.currentStep' expressions within the call() function.
@@ -67,14 +66,14 @@ object PartialPayIOUFlow {
             // Stage 1.
             progressTracker.currentStep = GENERATING_TRANSACTION
             // Generate an unsigned transaction.
-            val transactionState = serviceHub.loadState(stateRef)
-            val iouState = transactionState.data as IOUState
+            val iouTransactionState = serviceHub.loadState(iouStateRef)
+            val iouState = iouTransactionState.data as IOUState
             val iouStateNovo = IOUState(iouValue, iouState.lender, iouState.borrower)
-            val txCommand = Command(IOUContract.Commands.PartialPay(), iouState.participants.map { it.owningKey })
+            val iouTxCommand = Command(IOUContract.Commands.PartialPay(), iouState.participants.map { it.owningKey })
             val txBuilder = TransactionBuilder(notary)
-                    .addInputState(StateAndRef(transactionState, stateRef))
-                    .addOutputState(iouStateNovo, transactionState.contract)
-                    .addCommand(txCommand)
+                    .addInputState(StateAndRef(iouTransactionState, iouStateRef))
+                    .addOutputState(iouStateNovo, iouTransactionState.contract)
+                    .addCommand(iouTxCommand)
 
             // Stage 2.
             progressTracker.currentStep = VERIFYING_TRANSACTION
@@ -96,6 +95,41 @@ object PartialPayIOUFlow {
             progressTracker.currentStep = FINALISING_TRANSACTION
             // Notarise and record the transaction in both parties' vaults.
             return subFlow(FinalityFlow(fullySignedTx, FINALISING_TRANSACTION.childProgressTracker()))
+        }
+
+        @Suspendable
+        fun criaTransacao(): TransactionBuilder {
+            // Obtain a reference to the notary we want to use.
+            val notary = serviceHub.networkMapCache.notaryIdentities[0]
+
+            val transactionState = serviceHub.loadState(cashStateRef)
+            val eu = serviceHub.myInfo.legalIdentities.first()
+            val cashState = transactionState.data as CashState
+
+            requireThat {
+                "Eu devo ser o dono do dinheiro a ser transferido" using (cashState.dono == eu)
+                "Eu não posso transferir pra mim" using (cashState.dono != otherParty)
+            }
+
+            val cashStateNovo = CashState(iouValue, otherParty, listOf(cashState.dono, otherParty))
+            val diferencaTransferencia = cashState.value - iouValue
+
+            if (diferencaTransferencia > 0) {
+                val cashStateAlteracao = CashState(diferencaTransferencia, cashState.dono, listOf(cashState.dono, otherParty))
+
+                val txCommand = Command(IOUContract.Commands.TransferirParcial(), cashState.participants.map { it.owningKey })
+                return TransactionBuilder(notary)
+                        .addInputState(StateAndRef(transactionState, cashStateRef))
+                        .addOutputState(cashStateNovo, transactionState.contract)
+                        .addOutputState(cashStateAlteracao, transactionState.contract)
+                        .addCommand(txCommand)
+            } else {
+                val txCommand = Command(IOUContract.Commands.Transferir(), cashState.participants.map { it.owningKey })
+                return TransactionBuilder(notary)
+                        .addInputState(StateAndRef(transactionState, cashStateRef))
+                        .addOutputState(cashStateNovo, transactionState.contract)
+                        .addCommand(txCommand)
+            }
         }
     }
 

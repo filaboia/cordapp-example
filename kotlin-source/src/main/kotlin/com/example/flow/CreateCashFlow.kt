@@ -69,7 +69,8 @@ object CreateCashFlow {
             // Stage 1.
             progressTracker.currentStep = GENERATING_TRANSACTION
             // Generate an unsigned transaction.
-            val iouState = CashState(iouValue, null, serviceHub.myInfo.legalIdentities.first())
+            val myIdentity = serviceHub.myInfo.legalIdentities
+            val iouState = CashState(iouValue, myIdentity.first(), myIdentity)
             val txCommand = Command(IOUContract.Commands.Emitir(), iouState.participants.map { it.owningKey })
             val txBuilder = TransactionBuilder(notary)
                     .addOutputState(iouState, IOU_CONTRACT_ID)
