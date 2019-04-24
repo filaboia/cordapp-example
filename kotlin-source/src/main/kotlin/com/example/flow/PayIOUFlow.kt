@@ -2,6 +2,7 @@ package com.example.flow
 
 import co.paralleluniverse.fibers.Suspendable
 import com.example.contract.IOUContract
+import com.example.state.CashState
 import com.example.state.IOUState
 import net.corda.core.contracts.*
 import net.corda.core.flows.*
@@ -24,7 +25,8 @@ import net.corda.core.utilities.ProgressTracker.Step
 object PayIOUFlow {
     @InitiatingFlow
     @StartableByRPC
-    class Initiator(val iouStateRef: StateRef) : FlowLogic<SignedTransaction>() {
+    class Initiator(val cashStateRef: StateRef,
+                    val iouStateRef: StateRef) : FlowLogic<SignedTransaction>() {
         /**
          * The progress tracker checkpoints each stage of the flow and outputs the specified messages when each
          * checkpoint is reached in the code. See the 'progressTracker.currentStep' expressions within the call() function.
@@ -66,8 +68,41 @@ object PayIOUFlow {
             val transactionState = serviceHub.loadState(iouStateRef)
             val iouState = transactionState.data as IOUState
             val txCommand = Command(IOUContract.Commands.Pay(), iouState.participants.map { it.owningKey })
-            val txBuilder = TransactionBuilder(notary)
-                    .addInputState(StateAndRef(transactionState, iouStateRef))
+            val iouValue = iouState.value
+
+            val cashTransactionState = serviceHub.loadState(cashStateRef)
+            val eu = serviceHub.myInfo.legalIdentities.first()
+            val outro = iouState.lender
+            val cashState = cashTransactionState.data as CashState
+
+            requireThat {
+                "Eu devo ser quem pegou emprestado" using (iouState.borrower == eu)
+                "Eu devo ser o dono do dinheiro usado pra pagar a dívida" using (cashState.dono == eu)
+            }
+
+            val cashStateNovo = CashState(iouValue, outro, listOf(eu, outro))
+            val diferencaTransferencia = cashState.value - iouValue
+
+            val txBuilder : TransactionBuilder
+
+            if (diferencaTransferencia > 0) {
+                val cashStateAlteracao = CashState(diferencaTransferencia, eu, listOf(eu, outro))
+
+                val txCommand = Command(IOUContract.Commands.TransferirParcial(), cashState.participants.map { it.owningKey })
+                txBuilder =  TransactionBuilder(notary)
+                        .addInputState(StateAndRef(cashTransactionState, cashStateRef))
+                        .addOutputState(cashStateNovo, cashTransactionState.contract)
+                        .addOutputState(cashStateAlteracao, cashTransactionState.contract)
+                        .addCommand(txCommand)
+            } else {
+                val txCommand = Command(IOUContract.Commands.Transferir(), cashState.participants.map { it.owningKey })
+                txBuilder = TransactionBuilder(notary)
+                        .addInputState(StateAndRef(cashTransactionState, cashStateRef))
+                        .addOutputState(cashStateNovo, cashTransactionState.contract)
+                        .addCommand(txCommand)
+            }
+
+            txBuilder.addInputState(StateAndRef(transactionState, iouStateRef))
                     .addCommand(txCommand)
 
             // Stage 2.

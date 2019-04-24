@@ -1,9 +1,8 @@
 package com.example.api
 
-import com.example.flow.CreateIOUFlow
-import com.example.flow.PartialPayIOUFlow
-import com.example.flow.PayIOUFlow
+import com.example.flow.*
 import com.example.schema.IOUSchemaV1
+import com.example.state.CashState
 import com.example.state.IOUState
 import net.corda.core.contracts.StateAndRef
 import net.corda.core.identity.CordaX500Name
@@ -67,6 +66,11 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
     @Produces(MediaType.APPLICATION_JSON)
     fun getIOUs() = rpcOps.vaultQueryBy<IOUState>().states
 
+    @GET
+    @Path("cashes")
+    @Produces(MediaType.APPLICATION_JSON)
+    fun getCashes() = rpcOps.vaultQueryBy<CashState>().states
+
     /**
      * Initiates a flow to agree an IOU between two parties.
      *
@@ -80,7 +84,9 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
      */
     @PUT
     @Path("create-iou")
-    fun payIOU(@QueryParam("iouValue") iouValue: Int, @QueryParam("partyName") partyName: CordaX500Name?): Response {
+    fun createIOU(@QueryParam("iouValue") iouValue: Int,
+               @QueryParam("partyName") partyName: CordaX500Name?,
+               @QueryParam("cashUuid") cashUuid: UUID?): Response {
         if (iouValue <= 0 ) {
             return Response.status(BAD_REQUEST).entity("Query parameter 'iouValue' must be non-negative.\n").build()
         }
@@ -90,8 +96,73 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
         val otherParty = rpcOps.wellKnownPartyFromX500Name (partyName) ?:
                 return Response.status(BAD_REQUEST).entity("Party named $partyName cannot be found.\n").build()
 
+        if (cashUuid == null) {
+            return Response.status(BAD_REQUEST).entity("Query parameter 'cashUuid' missing.\n").build()
+        }
+
+        val cashCriteria = QueryCriteria.LinearStateQueryCriteria(uuid = listOf(cashUuid))
+        val cashStateAndRef : StateAndRef<CashState>
+        try {
+            cashStateAndRef = rpcOps.vaultQueryBy<CashState>(cashCriteria).states.single()
+        } catch (ex: NoSuchElementException) {
+            return Response.status(BAD_REQUEST).entity("State with uuid $cashUuid cannot be found.\n").build()
+        }
+
         return try {
-            val signedTx = rpcOps.startTrackedFlow(CreateIOUFlow::Initiator, iouValue, otherParty).returnValue.getOrThrow()
+            val signedTx = rpcOps.startTrackedFlow(CreateIOUFlow::Initiator, cashStateAndRef.ref, iouValue, otherParty).returnValue.getOrThrow()
+            Response.status(CREATED).entity("Transaction id ${signedTx.id} committed to ledger.\n").build()
+
+        } catch (ex: Throwable) {
+            logger.error(ex.message, ex)
+            Response.status(BAD_REQUEST).entity(ex.message!!).build()
+        }
+    }
+
+    @PUT
+    @Path("create-cash")
+    fun cashValueIOU(@QueryParam("cashValue") cashValue: Int): Response {
+        if (cashValue <= 0 ) {
+            return Response.status(BAD_REQUEST).entity("Query parameter 'cashValue' must be non-negative.\n").build()
+        }
+
+        return try {
+            val signedTx = rpcOps.startTrackedFlow(CreateCashFlow::Initiator, cashValue).returnValue.getOrThrow()
+            Response.status(CREATED).entity("Transaction id ${signedTx.id} committed to ledger.\n").build()
+
+        } catch (ex: Throwable) {
+            logger.error(ex.message, ex)
+            Response.status(BAD_REQUEST).entity(ex.message!!).build()
+        }
+    }
+
+    @PUT
+    @Path("transferir-cash")
+    fun payIOU(@QueryParam("cashValue") cashValue: Int,
+               @QueryParam("partyName") partyName: CordaX500Name?,
+               @QueryParam("cashUuid") cashUuid: UUID?): Response {
+        if (cashValue <= 0 ) {
+            return Response.status(BAD_REQUEST).entity("Query parameter 'iouValue' must be non-negative.\n").build()
+        }
+        if (partyName == null) {
+            return Response.status(BAD_REQUEST).entity("Query parameter 'partyName' missing or has wrong format.\n").build()
+        }
+        val otherParty = rpcOps.wellKnownPartyFromX500Name (partyName) ?:
+        return Response.status(BAD_REQUEST).entity("Party named $partyName cannot be found.\n").build()
+
+        if (cashUuid == null) {
+            return Response.status(BAD_REQUEST).entity("Query parameter 'cashUuid' missing.\n").build()
+        }
+
+        val cashCriteria = QueryCriteria.LinearStateQueryCriteria(uuid = listOf(cashUuid))
+        val cashStateAndRef : StateAndRef<CashState>
+        try {
+            cashStateAndRef = rpcOps.vaultQueryBy<CashState>(cashCriteria).states.single()
+        } catch (ex: NoSuchElementException) {
+            return Response.status(BAD_REQUEST).entity("State with uuid $cashUuid cannot be found.\n").build()
+        }
+
+        return try {
+            val signedTx = rpcOps.startTrackedFlow(TransferirCashFlow::Initiator, cashStateAndRef.ref, cashValue, otherParty).returnValue.getOrThrow()
             Response.status(CREATED).entity("Transaction id ${signedTx.id} committed to ledger.\n").build()
 
         } catch (ex: Throwable) {
@@ -102,21 +173,35 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
 
     @PUT
     @Path("pay-iou")
-    fun payIOU(@QueryParam("uuid") uuid: UUID?, @QueryParam("valorPago") valorPago: Int?): Response {
-        if (uuid == null) {
+    fun payIOU(@QueryParam("iouUuid") iouUuid: UUID?,
+               @QueryParam("cashUuid") cashUuid: UUID?,
+               @QueryParam("valorPago") valorPago: Int?): Response {
+        if (iouUuid == null) {
             return Response.status(BAD_REQUEST).entity("Query parameter 'uuid' missing.\n").build()
         }
 
-        val criteria = QueryCriteria.LinearStateQueryCriteria(uuid = listOf(uuid))
+        val criteria = QueryCriteria.LinearStateQueryCriteria(uuid = listOf(iouUuid))
         val stateAndRef : StateAndRef<IOUState>
         try {
             stateAndRef = rpcOps.vaultQueryBy<IOUState>(criteria).states.single()
         } catch (ex: NoSuchElementException) {
-            return Response.status(BAD_REQUEST).entity("State with uuid $uuid cannot be found.\n").build()
+            return Response.status(BAD_REQUEST).entity("State with uuid $iouUuid cannot be found.\n").build()
+        }
+
+        if (cashUuid == null) {
+            return Response.status(BAD_REQUEST).entity("Query parameter 'cashUuid' missing.\n").build()
+        }
+
+        val cashCriteria = QueryCriteria.LinearStateQueryCriteria(uuid = listOf(cashUuid))
+        val cashStateAndRef : StateAndRef<CashState>
+        try {
+            cashStateAndRef = rpcOps.vaultQueryBy<CashState>(cashCriteria).states.single()
+        } catch (ex: NoSuchElementException) {
+            return Response.status(BAD_REQUEST).entity("State with uuid $cashUuid cannot be found.\n").build()
         }
 
         return try {
-            val signedTx = payIOU(stateAndRef, valorPago)
+            val signedTx = payIOU(stateAndRef, cashStateAndRef, valorPago)
             Response.status(CREATED).entity("Transaction id ${signedTx.id} committed to ledger.\n").build()
 
         } catch (ex: Throwable) {
@@ -125,12 +210,12 @@ class ExampleApi(private val rpcOps: CordaRPCOps) {
         }
     }
 
-    private fun payIOU(stateAndRef: StateAndRef<IOUState>, valorPago: Int?) : SignedTransaction {
+    private fun payIOU(stateAndRef: StateAndRef<IOUState>, cashStateAndRef: StateAndRef<CashState>, valorPago: Int?) : SignedTransaction {
         val valorDivida = stateAndRef.state.data.value
         return if (valorPago != null && valorDivida - valorPago > 0) {
-            rpcOps.startTrackedFlow(PartialPayIOUFlow::Initiator, stateAndRef.ref, valorDivida - valorPago).returnValue.getOrThrow()
+            rpcOps.startTrackedFlow(PartialPayIOUFlow::Initiator, cashStateAndRef.ref, stateAndRef.ref, valorDivida - valorPago).returnValue.getOrThrow()
         } else if (valorPago == null || valorDivida - valorPago == 0) {
-            rpcOps.startTrackedFlow(PayIOUFlow::Initiator, stateAndRef.ref).returnValue.getOrThrow()
+            rpcOps.startTrackedFlow(PayIOUFlow::Initiator, cashStateAndRef.ref, stateAndRef.ref).returnValue.getOrThrow()
         } else {
             throw IllegalArgumentException("Valor pago é maior que a dívida")
         }

@@ -70,8 +70,38 @@ object PartialPayIOUFlow {
             val iouState = iouTransactionState.data as IOUState
             val iouStateNovo = IOUState(iouValue, iouState.lender, iouState.borrower)
             val iouTxCommand = Command(IOUContract.Commands.PartialPay(), iouState.participants.map { it.owningKey })
-            val txBuilder = TransactionBuilder(notary)
-                    .addInputState(StateAndRef(iouTransactionState, iouStateRef))
+            val cashTransactionState = serviceHub.loadState(cashStateRef)
+            val eu = serviceHub.myInfo.legalIdentities.first()
+            val outro = iouState.lender
+            val cashState = cashTransactionState.data as CashState
+            val cashStateNovo = CashState(iouValue, outro, listOf(eu, outro))
+            val diferencaTransferencia = cashState.value - iouValue
+
+            requireThat {
+                "Eu devo ser quem pegou emprestado" using (iouState.borrower == eu)
+                "Eu devo ser o dono do dinheiro usado pra pagar a dívida" using (cashState.dono == eu)
+            }
+
+            val txBuilder : TransactionBuilder
+
+            if (diferencaTransferencia > 0) {
+                val cashStateAlteracao = CashState(diferencaTransferencia, eu, listOf(eu, outro))
+
+                val txCommand = Command(IOUContract.Commands.TransferirParcial(), cashState.participants.map { it.owningKey })
+                txBuilder =  TransactionBuilder(notary)
+                        .addInputState(StateAndRef(cashTransactionState, cashStateRef))
+                        .addOutputState(cashStateNovo, cashTransactionState.contract)
+                        .addOutputState(cashStateAlteracao, cashTransactionState.contract)
+                        .addCommand(txCommand)
+            } else {
+                val txCommand = Command(IOUContract.Commands.Transferir(), cashState.participants.map { it.owningKey })
+                txBuilder = TransactionBuilder(notary)
+                        .addInputState(StateAndRef(cashTransactionState, cashStateRef))
+                        .addOutputState(cashStateNovo, cashTransactionState.contract)
+                        .addCommand(txCommand)
+            }
+
+            txBuilder.addInputState(StateAndRef(iouTransactionState, iouStateRef))
                     .addOutputState(iouStateNovo, iouTransactionState.contract)
                     .addCommand(iouTxCommand)
 
@@ -97,40 +127,6 @@ object PartialPayIOUFlow {
             return subFlow(FinalityFlow(fullySignedTx, FINALISING_TRANSACTION.childProgressTracker()))
         }
 
-        @Suspendable
-        fun criaTransacao(): TransactionBuilder {
-            // Obtain a reference to the notary we want to use.
-            val notary = serviceHub.networkMapCache.notaryIdentities[0]
-
-            val transactionState = serviceHub.loadState(cashStateRef)
-            val eu = serviceHub.myInfo.legalIdentities.first()
-            val cashState = transactionState.data as CashState
-
-            requireThat {
-                "Eu devo ser o dono do dinheiro a ser transferido" using (cashState.dono == eu)
-                "Eu não posso transferir pra mim" using (cashState.dono != otherParty)
-            }
-
-            val cashStateNovo = CashState(iouValue, otherParty, listOf(cashState.dono, otherParty))
-            val diferencaTransferencia = cashState.value - iouValue
-
-            if (diferencaTransferencia > 0) {
-                val cashStateAlteracao = CashState(diferencaTransferencia, cashState.dono, listOf(cashState.dono, otherParty))
-
-                val txCommand = Command(IOUContract.Commands.TransferirParcial(), cashState.participants.map { it.owningKey })
-                return TransactionBuilder(notary)
-                        .addInputState(StateAndRef(transactionState, cashStateRef))
-                        .addOutputState(cashStateNovo, transactionState.contract)
-                        .addOutputState(cashStateAlteracao, transactionState.contract)
-                        .addCommand(txCommand)
-            } else {
-                val txCommand = Command(IOUContract.Commands.Transferir(), cashState.participants.map { it.owningKey })
-                return TransactionBuilder(notary)
-                        .addInputState(StateAndRef(transactionState, cashStateRef))
-                        .addOutputState(cashStateNovo, transactionState.contract)
-                        .addCommand(txCommand)
-            }
-        }
     }
 
     @InitiatedBy(Initiator::class)
